@@ -10,16 +10,7 @@ from PyCharacterAI.exceptions import SessionClosedError, ActionError
 
 # --- Configuración de Flask + CORS --------------------
 app = Flask(__name__)
-CORS(
-    app,
-    origins=[
-        "http://localhost:5173",
-        "https://cool-aloisia-servveeer-1745206a.koyeb.app"
-    ],
-    supports_credentials=True,
-    methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"]
-)
+CORS(app, resources={r"/*": {"origins": "*"}})
 # -------------------------------------------------------
 
 # Nombre del personaje (override con CHARACTER_AI_NAME env var)
@@ -58,7 +49,7 @@ async def _chat_flow(token: str, character_id: str, mensaje: str, use_voice: boo
         if use_voice:
             # 4) Buscar voces disponibles
             voces = await client.utils.search_voices(CHARACTER_NAME)
-            # print("Voces encontradas:", [v.name for v in voces])  # debug
+            print("Voces encontradas:", [v.name for v in voces])  # debug
 
             # 5) Seleccionar voice_id
             voice_id = None
