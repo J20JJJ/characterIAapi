@@ -58,7 +58,7 @@ async def _chat_flow(token: str, character_id: str, mensaje: str, use_voice: boo
         if use_voice:
             # 4) Buscar voces disponibles
             voces = await client.utils.search_voices(CHARACTER_NAME)
-            print("Voces encontradas:", [v.name for v in voces])  # debug
+            # print("Voces encontradas:", [v.name for v in voces])  # debug
 
             # 5) Seleccionar voice_id
             voice_id = None
