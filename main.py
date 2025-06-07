@@ -1,59 +1,43 @@
 import os
 import base64
+import asyncio
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from flask import Flask, request, jsonify, abort
+from flask_cors import CORS
 from PyCharacterAI import get_client
 from PyCharacterAI.exceptions import SessionClosedError, ActionError
-import uvicorn
 
-app = FastAPI()
-
-# --- CORS middleware: ajusta a tus orígenes reales ---
-origins = [
-    "http://localhost:5173",
-    "https://cool-aloisia-servveeer-1745206a.koyeb.app",
-]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# --- Configuración de Flask + CORS --------------------
+app = Flask(__name__)
+CORS(
+    app,
+    origins=[
+        "http://localhost:5173",
+        "https://cool-aloisia-servveeer-1745206a.koyeb.app"
+    ],
+    supports_credentials=True,
+    methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"]
 )
-# ------------------------------------------------------
+# -------------------------------------------------------
 
-# Nombre del personaje (para buscar voces). Puedes sobreescribir vía ENV: CHARACTER_AI_NAME
+# Nombre del personaje (override con CHARACTER_AI_NAME env var)
 CHARACTER_NAME = os.getenv("CHARACTER_AI_NAME", "Megumin")
 
 
-class ChatRequest(BaseModel):
-    User_Token: str
-    Character_ID: str
-    mensaje: str
-    Voz: str  # "Si" or "No"
+class AuthenticationError(Exception):
+    """Para distinguir errores de token vs. otros errores."""
+    pass
 
 
-class ChatResponse(BaseModel):
-    author: str
-    text: str
-    audio_base64: Optional[str] = None
-
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat_api(req: ChatRequest):
-    token = req.User_Token
-    character_id = req.Character_ID
-    mensaje = req.mensaje
-    use_voice = req.Voz.strip().lower() == "si"
-
+async def _chat_flow(token: str, character_id: str, mensaje: str, use_voice: bool):
+    """Flujo async: autenticación, chat, TTS."""
     # 1) Autenticación
     try:
         client = await get_client(token=token)
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Authentication failed: {e}")
+        raise AuthenticationError(f"Authentication failed: {e}")
 
     try:
         # 2) Crear o recuperar chat
@@ -72,12 +56,11 @@ async def chat_api(req: ChatRequest):
 
         audio_b64: Optional[str] = None
         if use_voice:
-            # 4) Buscar voces disponibles para este personaje
+            # 4) Buscar voces disponibles
             voces = await client.utils.search_voices(CHARACTER_NAME)
-            # Para depurar, mira en logs qué voces hay:
-            print("Voces encontradas:", [v.name for v in voces])
+            print("Voces encontradas:", [v.name for v in voces])  # debug
 
-            # 5) Seleccionar voice_id (primero intenta match por nombre, si no, la primera)
+            # 5) Seleccionar voice_id
             voice_id = None
             for v in voces:
                 if v.name.strip().lower() == CHARACTER_NAME.strip().lower():
@@ -86,7 +69,7 @@ async def chat_api(req: ChatRequest):
             if not voice_id and voces:
                 voice_id = voces[0].voice_id
 
-            # 6) Generar audio si tenemos voice_id
+            # 6) Generar audio
             if voice_id:
                 try:
                     audio_bytes = await client.utils.generate_speech(
@@ -95,22 +78,47 @@ async def chat_api(req: ChatRequest):
                         primary.candidate_id,
                         voice_id
                     )
-                    audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+                    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
                 except ActionError as e:
-                    # Si falla, lo imprimimos para depurar y devolvemos solo texto
                     print("TTS error:", e)
                     audio_b64 = None
 
-        return ChatResponse(author=author, text=text, audio_base64=audio_b64)
+        return {"author": author, "text": text, "audio_base64": audio_b64}
 
     except SessionClosedError:
-        raise HTTPException(status_code=500, detail="Session was closed unexpectedly.")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # lo dejamos propagar para que lo capture el caller
+        raise
     finally:
         await client.close_session()
 
 
+@app.route("/chat", methods=["POST"])
+def chat_api():
+    data = request.get_json(force=True)
+    # Validación del body
+    for field in ("User_Token", "Character_ID", "mensaje", "Voz"):
+        if field not in data:
+            abort(400, description=f"Missing field: {field}")
+
+    token = data["User_Token"]
+    character_id = data["Character_ID"]
+    mensaje = data["mensaje"]
+    use_voice = data["Voz"].strip().lower() == "si"
+
+    # Ejecuta el flujo async
+    try:
+        result = asyncio.run(_chat_flow(token, character_id, mensaje, use_voice))
+    except AuthenticationError as e:
+        abort(401, description=str(e))
+    except SessionClosedError:
+        abort(500, description="Session was closed unexpectedly.")
+    except Exception as e:
+        abort(500, description=str(e))
+
+    return jsonify(result), 200
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # En desarrollo puedes poner debug=True
+    app.run(host="0.0.0.0", port=port)
