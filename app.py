@@ -4,14 +4,20 @@ import asyncio
 from typing import Optional
 
 from flask import Flask, request, jsonify, abort
-from flask_cors import CORS
 from PyCharacterAI import get_client
 from PyCharacterAI.exceptions import SessionClosedError, ActionError
 
-# --- Configuración de Flask + CORS --------------------
+# --- Configuración de Flask y CORS manual --------------------
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
-# -------------------------------------------------------
+
+@app.after_request
+def add_cors_headers(response):
+    # Permite cualquier origen y los métodos/headers necesarios
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    return response
+# --------------------------------------------------------------
 
 # Nombre del personaje (override con CHARACTER_AI_NAME env var)
 CHARACTER_NAME = os.getenv("CHARACTER_AI_NAME", "Megumin")
@@ -83,8 +89,12 @@ async def _chat_flow(token: str, character_id: str, mensaje: str, use_voice: boo
         await client.close_session()
 
 
-@app.route("/chat", methods=["POST"])
+@app.route("/chat", methods=["OPTIONS", "POST"])
 def chat_api():
+    # Preflight CORS
+    if request.method == "OPTIONS":
+        return ("", 200)
+
     data = request.get_json(force=True)
     # Validación del body
     for field in ("User_Token", "Character_ID", "mensaje", "Voz"):
