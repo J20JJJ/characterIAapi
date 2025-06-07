@@ -14,7 +14,7 @@ app = FastAPI()
 # --- CORS middleware: ajusta a tus orígenes reales ---
 origins = [
     "http://localhost:5173",
-    "https://<tu-servicio>.koyeb.app",
+    "https://cool-aloisia-servveeer-1745206a.koyeb.app",
 ]
 app.add_middleware(
     CORSMiddleware,
