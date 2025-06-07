@@ -40,11 +40,15 @@ async def enviar_mensaje(datos: MensajeEntrada):
 
     # 👉 Obtener voz
     voice_id = None
-    voces = await client.utils.search_voices(datos.Voz)
-    for v in voces:
-        if v.name.strip().lower() == datos.Voz.strip().lower():
-            voice_id = v.voice_id
-            break
+    try:
+        voces = await client.utils.search_voices(datos.Voz)
+        for v in voces:
+            if v.name.strip().lower() == datos.Voz.strip().lower():
+                voice_id = v.voice_id
+                break
+    except Exception as e:
+        await client.close_session()
+        return {"error": f"Error al buscar voz: {str(e)}"}
 
     try:
         chat, _ = await client.chat.create_chat(datos.Character_ID)
@@ -63,13 +67,30 @@ async def enviar_mensaje(datos: MensajeEntrada):
         turn_id = respuesta.turn_id
         candidate_id = respuesta.get_primary_candidate().candidate_id
 
+        # 👉 Intentar generar el audio con y sin voice_id
         try:
-            audio_bytes = await client.utils.generate_speech(
-                chat_id, turn_id, candidate_id, voice_id
-            )
-        except ActionError as e:
+            if voice_id:
+                audio_bytes = await client.utils.generate_speech(
+                    chat_id, turn_id, candidate_id, voice_id
+                )
+            else:
+                # Intentar sin voice_id directamente
+                audio_bytes = await client.utils.generate_speech(
+                    chat_id, turn_id, candidate_id
+                )
+        except ActionError:
+            try:
+                # Fallback: intentar sin voice_id si falló el anterior
+                audio_bytes = await client.utils.generate_speech(
+                    chat_id, turn_id, candidate_id
+                )
+            except ActionError as e:
+                await client.close_session()
+                return {"error": f"No se pudo generar el audio con o sin voz: {str(e)}"}
+
+        if not audio_bytes:
             await client.close_session()
-            return {"error": f"No se pudo generar el audio: {str(e)}"}
+            return {"error": "El audio generado está vacío."}
 
         # Codificar el audio a base64
         audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
@@ -78,7 +99,8 @@ async def enviar_mensaje(datos: MensajeEntrada):
         return {
             "audio_base64": audio_base64,
             "author": author,
-            "text": texto_respuesta
+            "text": texto_respuesta,
+            "audio_length": len(audio_bytes)
         }
 
     except SessionClosedError:
