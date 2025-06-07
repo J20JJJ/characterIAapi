@@ -4,20 +4,15 @@ import asyncio
 from typing import Optional
 
 from flask import Flask, request, jsonify, abort
+from flask_cors import CORS
 from PyCharacterAI import get_client
 from PyCharacterAI.exceptions import SessionClosedError, ActionError
 
-# --- Configuración de Flask y CORS manual --------------------
+# --- Inicializa Flask + CORS global -------------------
 app = Flask(__name__)
-
-@app.after_request
-def add_cors_headers(response):
-    # Permite cualquier origen y los métodos/headers necesarios
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    return response
-# --------------------------------------------------------------
+# Esto añade Access-Control-Allow-Origin: * (y el resto) en todas las rutas
+CORS(app)
+# -------------------------------------------------------
 
 # Nombre del personaje (override con CHARACTER_AI_NAME env var)
 CHARACTER_NAME = os.getenv("CHARACTER_AI_NAME", "Megumin")
@@ -30,17 +25,13 @@ class AuthenticationError(Exception):
 
 async def _chat_flow(token: str, character_id: str, mensaje: str, use_voice: bool):
     """Flujo async: autenticación, chat, TTS."""
-    # 1) Autenticación
     try:
         client = await get_client(token=token)
     except Exception as e:
         raise AuthenticationError(f"Authentication failed: {e}")
 
     try:
-        # 2) Crear o recuperar chat
         chat, _ = await client.chat.create_chat(character_id)
-
-        # 3) Enviar mensaje y obtener respuesta
         respuesta = await client.chat.send_message(
             character_id,
             chat.chat_id,
@@ -53,20 +44,15 @@ async def _chat_flow(token: str, character_id: str, mensaje: str, use_voice: boo
 
         audio_b64: Optional[str] = None
         if use_voice:
-            # 4) Buscar voces disponibles
             voces = await client.utils.search_voices(CHARACTER_NAME)
             print("Voces encontradas:", [v.name for v in voces])  # debug
 
-            # 5) Seleccionar voice_id
-            voice_id = None
-            for v in voces:
-                if v.name.strip().lower() == CHARACTER_NAME.strip().lower():
-                    voice_id = v.voice_id
-                    break
-            if not voice_id and voces:
-                voice_id = voces[0].voice_id
+            voice_id = next(
+                (v.voice_id for v in voces
+                 if v.name.strip().lower() == CHARACTER_NAME.strip().lower()),
+                None
+            ) or (voces[0].voice_id if voces else None)
 
-            # 6) Generar audio
             if voice_id:
                 try:
                     audio_bytes = await client.utils.generate_speech(
@@ -83,7 +69,6 @@ async def _chat_flow(token: str, character_id: str, mensaje: str, use_voice: boo
         return {"author": author, "text": text, "audio_base64": audio_b64}
 
     except SessionClosedError:
-        # lo dejamos propagar para que lo capture el caller
         raise
     finally:
         await client.close_session()
@@ -91,12 +76,11 @@ async def _chat_flow(token: str, character_id: str, mensaje: str, use_voice: boo
 
 @app.route("/chat", methods=["OPTIONS", "POST"])
 def chat_api():
-    # Preflight CORS
+    # Responde al preflight automáticamente y con headers CORS
     if request.method == "OPTIONS":
         return ("", 200)
 
     data = request.get_json(force=True)
-    # Validación del body
     for field in ("User_Token", "Character_ID", "mensaje", "Voz"):
         if field not in data:
             abort(400, description=f"Missing field: {field}")
@@ -106,7 +90,6 @@ def chat_api():
     mensaje = data["mensaje"]
     use_voice = data["Voz"].strip().lower() == "si"
 
-    # Ejecuta el flujo async
     try:
         result = asyncio.run(_chat_flow(token, character_id, mensaje, use_voice))
     except AuthenticationError as e:
@@ -121,5 +104,5 @@ def chat_api():
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
-    # En desarrollo puedes poner debug=True
+    # En desarrollo podrías poner debug=True
     app.run(host="0.0.0.0", port=port)
