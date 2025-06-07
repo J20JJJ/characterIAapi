@@ -1,7 +1,9 @@
-import asyncio
-import base64
 import os
-from fastapi import FastAPI
+import io
+import asyncio
+import pygame
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from PyCharacterAI import get_client
@@ -9,103 +11,75 @@ from PyCharacterAI.exceptions import SessionClosedError, ActionError
 
 app = FastAPI()
 
-# 👉 CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Cambia esto en producción
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 👉 Modelo de entrada
 class MensajeEntrada(BaseModel):
     User_Token: str
     Character_ID: str
     mensaje: str
-    Voz: str = "Megumin"  # Valor por defecto
+    Voz: str  # "Si" para usar voz personalizada, cualquier otra cosa para omitir
 
-@app.post("/enviar")
-async def enviar_mensaje(datos: MensajeEntrada):
-    try:
-        client = await get_client(token=datos.User_Token)
-    except Exception as e:
-        return {"error": f"No se pudo autenticar: {str(e)}"}
+# Inicializar pygame mixer solo una vez
+pygame.mixer.init()
 
+@app.post("/hablar")
+async def hablar(data: MensajeEntrada):
     try:
+        client = await get_client(token=data.User_Token, web_next_auth=None)
         me = await client.account.fetch_me()
     except Exception as e:
-        await client.close_session()
-        return {"error": f"Error al obtener el usuario: {str(e)}"}
+        raise HTTPException(status_code=401, detail=f"No se pudo autenticar: {str(e)}")
 
-    # 👉 Obtener voz
+    # Buscar voz si se solicitó
     voice_id = None
-    try:
-        voces = await client.utils.search_voices(datos.Voz)
+    if data.Voz.lower() == "si":
+        voces = await client.utils.search_voices("Megumin")
         for v in voces:
-            if v.name.strip().lower() == datos.Voz.strip().lower():
+            if v.name.strip().lower() == "megumin":
                 voice_id = v.voice_id
                 break
-    except Exception as e:
-        await client.close_session()
-        return {"error": f"Error al buscar voz: {str(e)}"}
 
     try:
-        chat, _ = await client.chat.create_chat(datos.Character_ID)
+        chat, greeting = await client.chat.create_chat(data.Character_ID)
+
         respuesta = await client.chat.send_message(
-            datos.Character_ID,
+            data.Character_ID,
             chat.chat_id,
-            datos.mensaje,
+            data.mensaje,
             streaming=False
         )
-
         texto_respuesta = respuesta.get_primary_candidate().text
-        author = respuesta.author_name
 
-        # Extraer IDs necesarios para generar el audio
+        # Extraer datos para síntesis de voz
         chat_id = chat.chat_id
         turn_id = respuesta.turn_id
         candidate_id = respuesta.get_primary_candidate().candidate_id
 
-        # 👉 Intentar generar el audio con y sin voice_id
+        # Intentar generar audio
         try:
-            if voice_id:
-                audio_bytes = await client.utils.generate_speech(
-                    chat_id, turn_id, candidate_id, voice_id
-                )
-            else:
-                # Intentar sin voice_id directamente
-                audio_bytes = await client.utils.generate_speech(
-                    chat_id, turn_id, candidate_id
-                )
-        except ActionError:
-            try:
-                # Fallback: intentar sin voice_id si falló el anterior
-                audio_bytes = await client.utils.generate_speech(
-                    chat_id, turn_id, candidate_id
-                )
-            except ActionError as e:
-                await client.close_session()
-                return {"error": f"No se pudo generar el audio con o sin voz: {str(e)}"}
+            audio_bytes = await client.utils.generate_speech(
+                chat_id,
+                turn_id,
+                candidate_id,
+                voice_id
+            )
+        except ActionError as e:
+            raise HTTPException(status_code=500, detail=f"No se pudo generar audio: {e}")
 
-        if not audio_bytes:
-            await client.close_session()
-            return {"error": "El audio generado está vacío."}
-
-        # Codificar el audio a base64
-        audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
-
-        await client.close_session()
-        return {
-            "audio_base64": audio_base64,
-            "author": author,
-            "text": texto_respuesta,
-            "audio_length": len(audio_bytes)
+        # Devolver el audio como MP3 para el navegador
+        audio_stream = io.BytesIO(audio_bytes)
+        headers = {
+            "Content-Disposition": "inline; filename=respuesta.mp3"
         }
+        return StreamingResponse(audio_stream, media_type="audio/mpeg", headers=headers)
 
-    except SessionClosedError:
-        return {"error": "Sesión cerrada"}
     except Exception as e:
-        return {"error": f"Error inesperado: {str(e)}"}
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         await client.close_session()
