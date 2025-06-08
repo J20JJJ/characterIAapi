@@ -1,4 +1,4 @@
-![Unofficial CharacterAI API](./assets/unofficial-characterai-api.png)
+![Unofficial CharacterAI API](assets/titulo.png)
 
 ¡Interactúa con personajes de **Character.AI** mediante una API no oficial sencilla que además convierte las respuestas en voz!
 🎙️ Ideal para integraciones con bots, asistentes virtuales o apps interactivas.
@@ -88,6 +88,7 @@ GET /chat/{chat_id}?token=tu_token
 
 > Puedes conectarlo a cualquier frontend: React, Vue, vanilla JS, etc.
 
+![Unofficial CharacterAI API](assets/Screenshot_5.png)
 ---
 
 ## 🔐 Necesitas...
@@ -134,6 +135,3 @@ curl -X POST https://tudominio.koyeb.app/enviar \
 
 ¿Ideas? ¿Mejoras? ¡Haz un fork o abre un issue!
 
----
-
-¿Te gustaría que te lo devuelva en archivo `.md` también?
