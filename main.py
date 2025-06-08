@@ -1,12 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import asyncio, httpx
+import asyncio, httpx, json
 import io
 import base64
 from typing import Optional
 from PyCharacterAI import get_client
 from PyCharacterAI.exceptions import SessionClosedError, ActionError
+import difflib
 
 
 app = FastAPI()
@@ -69,10 +71,34 @@ async def enviar_mensaje(datos: MensajeEntrada):
         # Buscar voz si es necesario
         if datos.Voz.lower() == "si":
             voces = await client.utils.search_voices(author_name)
+            voice_id = None
+
+            # 1. Primero intentamos coincidencia exacta (como ya lo hacías)
             for v in voces:
                 if v.name.strip().lower() == author_name.strip().lower():
                     voice_id = v.voice_id
                     break
+
+            # 2. Si no se encontró, probamos coincidencia parcial (que el nombre esté contenido)
+            if not voice_id:
+                for v in voces:
+                    if author_name.strip().lower() in v.name.strip().lower():
+                        voice_id = v.voice_id
+                        break
+
+            # 3. Si aún no se encuentra, usamos la voz más parecida con difflib
+            if not voice_id and voces:
+                nombres_voces = [v.name for v in voces]
+                mejor_match = difflib.get_close_matches(author_name, nombres_voces, n=1, cutoff=0.5)
+                if mejor_match:
+                    for v in voces:
+                        if v.name == mejor_match[0]:
+                            voice_id = v.voice_id
+                            print(f"✅ Voz sugerida por similitud: {v.name}")
+                            break
+
+            if not voice_id:
+                print(f"⚠️ No se encontró una voz adecuada para {author_name}")
 
         # Enviar mensaje
         respuesta = await client.chat.send_message(
@@ -114,3 +140,25 @@ async def enviar_mensaje(datos: MensajeEntrada):
 
     except Exception as e:
         return {"error": str(e)}
+    
+@app.get("/chat/{chat_id}")
+async def get_chat(chat_id: str, token: str):
+    url = f"https://neo.character.ai/turns/{chat_id}/"
+    headers = {
+        "Authorization": f"Token {token}",
+        "Accept": "application/json",
+        "Origin": "https://character.ai",
+        "Referer": "https://character.ai/",
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    async with httpx.AsyncClient() as client:
+        r = await client.get(url, headers=headers)
+    if r.status_code != 200:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+
+    data = r.json().get("turns", [])
+    result = [{"author": t["author"]["name"], "message": t["candidates"][0]["raw_content"]}
+              for t in sorted(data, key=lambda x: x["create_time"]) if t.get("candidates")]
+
+    return JSONResponse(content=result)
