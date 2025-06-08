@@ -1,12 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import asyncio
+import asyncio, httpx
 import io
 import base64
 from typing import Optional
 from PyCharacterAI import get_client
 from PyCharacterAI.exceptions import SessionClosedError, ActionError
+
 
 app = FastAPI()
 
@@ -27,6 +28,16 @@ class MensajeEntrada(BaseModel):
     Voz: str
     Chat_ID: Optional[str] = None  # Nuevo campo opcional
 
+async def nombre_personaje(token: str, character_id: str) -> str:
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            "https://beta.character.ai/chat/character/info/",
+            headers={"Authorization": "Token " + token},
+            json={"external_id": "" + character_id}
+        )
+        print(r.json().get("character", {}).get("name"))
+        return r.json().get("character", {}).get("name", "Desconocido")
+
 @app.post("/enviar")
 async def enviar_mensaje(datos: MensajeEntrada):
     TOKEN = datos.User_Token
@@ -46,6 +57,9 @@ async def enviar_mensaje(datos: MensajeEntrada):
         if chat_id:
             print(f"🔄 Usando chat existente con ID: {chat_id}")
             chat = await client.chat.fetch_chat(chat_id)
+            
+            author_name = await nombre_personaje(TOKEN, CHARACTER_ID)
+
         else:
             chat, greeting = await client.chat.create_chat(CHARACTER_ID)
             chat_id = chat.chat_id
@@ -54,9 +68,9 @@ async def enviar_mensaje(datos: MensajeEntrada):
 
         # Buscar voz si es necesario
         if datos.Voz.lower() == "si":
-            voces = await client.utils.search_voices("Megumin")
+            voces = await client.utils.search_voices(author_name)
             for v in voces:
-                if v.name.strip().lower() == "megumin":
+                if v.name.strip().lower() == author_name.strip().lower():
                     voice_id = v.voice_id
                     break
 
