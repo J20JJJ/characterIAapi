@@ -11,7 +11,7 @@ from PyCharacterAI.exceptions import SessionClosedError, ActionError
 import difflib
 
 
-app = FastAPI()
+app = FastAPI(root_path="/api/main")
 
 # Middleware CORS
 app.add_middleware(
