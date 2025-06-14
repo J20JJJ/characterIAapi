@@ -1,6 +1,7 @@
 {
+  "version": 2,
   "functions": {
-    "api/main.py": { "runtime": "python3.10" }
+    "api/main.py": { "runtime": "python3.11" }
   },
   "routes": [
     { "src": "/api/main(/.*)?", "dest": "api/main.py" }
